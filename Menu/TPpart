@@ -1,6 +1,6 @@
 --[[
     TPpart Auto Loot v2
-    Автор: fidarlyn
+    Автор: 1Qlua / fidarlyn
     Функции:
     - Авто-ТП к ближайшему нужному предмету
     - Автоматическая попытка подбора (ProximityPrompt + touch)
