@@ -1,0 +1,544 @@
+-- TSRUST Ohio Mega Hub | Все функции встроены
+-- Авто-лут, скорость, прыжок, полёт, ноуклип, ESP, кил-аура, ТП к игрокам, анти-АФК
+
+local ok, Library = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/1Qlua-RBXscript/1qlua/refs/heads/main/labar"))()
+end)
+if not ok or not Library then return warn("[TSRUST] UI error") end
+
+pcall(function() Library:SetTheme("Ocean") end)
+
+local Players   = game:GetService("Players")
+local WS        = game:GetService("Workspace")
+local RS        = game:GetService("RunService")
+local UIS       = game:GetService("UserInputService")
+local Lighting  = game:GetService("Lighting")
+local VirtUser  = game:GetService("VirtualUser")
+local LP        = Players.LocalPlayer
+
+local S = {
+    Loot = false, LootMode = "Teleport", LootDelay = 0.2, IdleDelay = 0.5,
+    Radius = 900, FlySpeedLoot = 80,
+    SpeedLock = false, Speed = 16,
+    JumpLock = false, Jump = 50,
+    Fly = false, FlySpeed = 60, FlyBV = nil, FlyBG = nil, FlyConn = nil,
+    Noclip = false, NoclipConn = nil,
+    ESP = false, ESPFolder = nil,
+    KillAura = false, KillRadius = 30,
+    Follow = false, LoopAll = false, Target = nil,
+    AntiAFK = false, AntiAFKConn = nil,
+    Fullbright = false, OldAmbient = nil, OldBright = nil, OldClock = nil,
+    InfJump = false,
+    GodMode = false,
+}
+
+local Items = {}
+local function addItem(name, on)
+    Items[string.lower(name)] = on
+end
+addItem("Money printer", true)
+addItem("gold deagle", true)
+addItem("gold ak-47", true)
+addItem("gold ak", true)
+addItem("scar l", true)
+addItem("fn fal", true)
+addItem("as val", true)
+addItem("military armory keycard", true)
+addItem("mustang key", true)
+addItem("c4", true)
+addItem("emerald", true)
+addItem("ruby", true)
+addItem("amethyst", true)
+addItem("diamond", true)
+addItem("dark matter gem", true)
+addItem("treasure chest", true)
+addItem("treasure map", true)
+addItem("cash", true)
+addItem("money", true)
+
+local function chr()
+    local c = LP.Character
+    if not c then c = LP.CharacterAdded:Wait() end
+    local h = c and (c:FindFirstChild("HumanoidRootPart") or c:WaitForChild("HumanoidRootPart", 5))
+    return c, h
+end
+
+local function hum()
+    local c = LP.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function clrPhys()
+    local c, h = chr()
+    if not h then return end
+    for _, v in ipairs(h:GetChildren()) do
+        if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end
+    end
+end
+
+local function tp(pos)
+    local _, h = chr()
+    if h then h.CFrame = CFrame.new(pos) end
+end
+
+local function pickup(part)
+    if not part or not part.Parent then return end
+    local _, h = chr()
+    if not h then return end
+    local pp = part:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pp then
+        if typeof(fireproximityprompt) == "function" then
+            fireproximityprompt(pp)
+        else
+            pp.HoldDuration = 0
+            pp:InputHoldBegin()
+            task.wait(0.15)
+            pp:InputHoldEnd()
+        end
+    end
+    local cd = part:FindFirstChildWhichIsA("ClickDetector", true)
+    if cd and typeof(fireclickdetector) == "function" then fireclickdetector(cd) end
+    if typeof(firetouchinterest) == "function" then
+        firetouchinterest(h, part, 0)
+        firetouchinterest(h, part, 1)
+    end
+end
+
+local function findLoot()
+    local _, h = chr()
+    if not h then return nil end
+    local best, bd = nil, S.Radius
+    for _, inst in ipairs(WS:GetDescendants()) do
+        if inst:IsA("BasePart") and Items[string.lower(inst.Name)] then
+            local d = (inst.Position - h.Position).Magnitude
+            if d < bd then bd = d; best = inst end
+        end
+    end
+    return best
+end
+
+local function flyToPos(pos)
+    local c, h = chr()
+    if not h then return end
+    clrPhys()
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(4e4,4e4,4e4)
+    bv.Velocity = Vector3.new(0,0,0)
+    bv.P = 1500
+    bv.Parent = h
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(4e4,4e4,4e4)
+    bg.P = 3000
+    bg.CFrame = h.CFrame
+    bg.Parent = h
+    local done, t0 = false, tick()
+    local cn
+    cn = RS.Heartbeat:Connect(function()
+        if not S.Loot or not h.Parent or tick()-t0>12 then done=true cn:Disconnect() return end
+        local delta = pos - h.Position
+        if delta.Magnitude < 4 then done=true cn:Disconnect() return end
+        bv.Velocity = delta.Unit * math.min(S.FlySpeedLoot, delta.Magnitude*3)
+        bg.CFrame = CFrame.new(h.Position, pos)
+    end)
+    while not done and tick()-t0<12 do task.wait() end
+    if cn then cn:Disconnect() end
+    clrPhys()
+    if h and h.Parent then h.CFrame = CFrame.new(pos) end
+end
+
+-- === АВТО ЛУТ ===
+task.spawn(function()
+    while task.wait(0.05) do
+        if S.Loot then
+            local _, h = chr()
+            if h then
+                local t = findLoot()
+                if t and t.Parent then
+                    local dest = t.Position + Vector3.new(0,3,0)
+                    if S.LootMode == "Fly" then flyToPos(dest) else tp(dest) end
+                    pickup(t)
+                    if Library.Notify then Library:Notify("TSRUST", "Подобрал: "..t.Name, 1) end
+                    task.wait(S.LootDelay)
+                else task.wait(S.IdleDelay) end
+            else task.wait(1) end
+        end
+    end
+end)
+
+-- === СКОРОСТЬ + ПРЫЖОК ===
+task.spawn(function()
+    while task.wait(0.15) do
+        local h = hum()
+        if h then
+            if S.SpeedLock then h.WalkSpeed = S.Speed end
+            if S.JumpLock then h.JumpPower = S.Jump; h.JumpHeight = S.Jump * 0.35 end
+        end
+    end
+end)
+
+-- === ПОЛЁТ (WASD) ===
+local function startFly()
+    local c, h = chr()
+    if not h then return end
+    clrPhys()
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(4e4,4e4,4e4)
+    bv.Velocity = Vector3.new(0,0,0)
+    bv.P = 1500
+    bv.Parent = h
+    S.FlyBV = bv
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(4e4,4e4,4e4)
+    bg.P = 3000
+    bg.Parent = h
+    S.FlyBG = bg
+    S.FlyConn = RS.Heartbeat:Connect(function()
+        if not S.Fly or not h.Parent then
+            if S.FlyConn then S.FlyConn:Disconnect(); S.FlyConn=nil end
+            clrPhys(); return
+        end
+        local cam = WS.CurrentCamera
+        local dir = Vector3.new(0,0,0)
+        if UIS:IsKeyDown(Enum.KeyCode.W) then dir = dir + cam.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.S) then dir = dir - cam.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.A) then dir = dir - cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.D) then dir = dir + cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
+        if dir.Magnitude > 0 then dir = dir.Unit end
+        bv.Velocity = dir * S.FlySpeed
+        bg.CFrame = cam.CFrame
+    end)
+end
+
+local function stopFly()
+    if S.FlyConn then S.FlyConn:Disconnect(); S.FlyConn = nil end
+    clrPhys()
+end
+
+-- === НОУКЛИП ===
+local function startNoclip()
+    S.NoclipConn = RS.Stepped:Connect(function()
+        if not S.Noclip then return end
+        local c = LP.Character
+        if c then
+            for _, p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = false end
+            end
+        end
+    end)
+end
+
+local function stopNoclip()
+    if S.NoclipConn then S.NoclipConn:Disconnect(); S.NoclipConn = nil end
+end
+
+-- === ESP ===
+local function createESP()
+    if S.ESPFolder then S.ESPFolder:Destroy() end
+    S.ESPFolder = Instance.new("Folder", game:GetService("CoreGui"))
+    S.ESPFolder.Name = "TSRUST_ESP"
+end
+
+local function updateESP()
+    if not S.ESPFolder then return end
+    for _, v in ipairs(S.ESPFolder:GetChildren()) do v:Destroy() end
+    if not S.ESP then return end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and p.Character then
+            local head = p.Character:FindFirstChild("Head")
+            if head then
+                local bb = Instance.new("BillboardGui", S.ESPFolder)
+                bb.Adornee = head
+                bb.Size = UDim2.new(0, 200, 0, 30)
+                bb.StudsOffset = Vector3.new(0, 3, 0)
+                bb.AlwaysOnTop = true
+                local tl = Instance.new("TextLabel", bb)
+                tl.Size = UDim2.new(1,0,1,0)
+                tl.BackgroundTransparency = 1
+                tl.Text = p.Name
+                tl.TextColor3 = Color3.fromRGB(100, 200, 255)
+                tl.TextStrokeTransparency = 0
+                tl.Font = Enum.Font.GothamBold
+                tl.TextSize = 14
+                local hl = Instance.new("Highlight", S.ESPFolder)
+                hl.Adornee = p.Character
+                hl.FillColor = Color3.fromRGB(80, 170, 255)
+                hl.FillTransparency = 0.7
+                hl.OutlineColor = Color3.fromRGB(200, 230, 255)
+                hl.OutlineTransparency = 0
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    createESP()
+    while task.wait(1) do
+        if S.ESP then updateESP() else
+            if S.ESPFolder then for _, v in ipairs(S.ESPFolder:GetChildren()) do v:Destroy() end end
+        end
+    end
+end)
+
+-- === КИЛ-АУРА ===
+task.spawn(function()
+    while task.wait(0.15) do
+        if S.KillAura then
+            local c, h = chr()
+            if h then
+                local best, bd = nil, S.KillRadius
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LP then
+                        local tc = p.Character
+                        local th = tc and tc:FindFirstChild("HumanoidRootPart")
+                        local tm = tc and tc:FindFirstChildOfClass("Humanoid")
+                        if th and tm and tm.Health > 0 then
+                            local d = (th.Position - h.Position).Magnitude
+                            if d < bd then bd = d; best = th end
+                        end
+                    end
+                end
+                if best then
+                    h.CFrame = best.CFrame * CFrame.new(0,1.5,0)
+                    local tool = c:FindFirstChildOfClass("Tool") or LP.Backpack:FindFirstChildOfClass("Tool")
+                    if tool and tool.Parent == LP.Backpack then tool.Parent = c end
+                    if typeof(mouse1click) == "function" then mouse1click() end
+                    if typeof(firetouchinterest) == "function" then
+                        firetouchinterest(h, best, 0)
+                        firetouchinterest(h, best, 1)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- === ФОЛЛОУ ===
+task.spawn(function()
+    while task.wait(0.2) do
+        if S.Follow and S.Target then
+            local p = Players:FindFirstChild(S.Target)
+            local th = p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+            local _, h = chr()
+            if th and h then h.CFrame = th.CFrame + Vector3.new(0,3,0) end
+        end
+    end
+end)
+
+-- === ЛУП ПО ВСЕМ ===
+task.spawn(function()
+    local i = 1
+    while task.wait(0.35) do
+        if S.LoopAll then
+            local list = {}
+            for _, p in ipairs(Players:GetPlayers()) do if p ~= LP then table.insert(list, p) end end
+            if #list > 0 then
+                if i > #list then i = 1 end
+                local th = list[i].Character and list[i].Character:FindFirstChild("HumanoidRootPart")
+                if th then tp(th.Position + Vector3.new(0,3,0)) end
+                i = i + 1
+            end
+        end
+    end
+end)
+
+-- === АНТИ-АФК ===
+local function startAntiAFK()
+    S.AntiAFKConn = LP.Idled:Connect(function()
+        VirtUser:CaptureController()
+        VirtUser:ClickButton2(Vector2.new())
+    end)
+end
+
+local function stopAntiAFK()
+    if S.AntiAFKConn then S.AntiAFKConn:Disconnect(); S.AntiAFKConn = nil end
+end
+
+-- === БЕСКОНЕЧНЫЙ ПРЫЖОК ===
+UIS.JumpRequest:Connect(function()
+    if S.InfJump then
+        local h = hum()
+        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+-- === ФУЛЛБРАЙТ ===
+local function setFullbright(on)
+    if on then
+        S.OldAmbient = Lighting.Ambient
+        S.OldBright = Lighting.Brightness
+        S.OldClock = Lighting.ClockTime
+        Lighting.Ambient = Color3.new(1,1,1)
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 1e9
+    else
+        if S.OldAmbient then Lighting.Ambient = S.OldAmbient end
+        if S.OldBright then Lighting.Brightness = S.OldBright end
+        if S.OldClock then Lighting.ClockTime = S.OldClock end
+    end
+end
+
+-- === GOD MODE ===
+local function toggleGod(on)
+    local c = LP.Character
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    if not h then return end
+    if on then
+        h.MaxHealth = math.huge
+        h.Health = math.huge
+    else
+        h.MaxHealth = 100
+        h.Health = 100
+    end
+end
+
+-- ==================== UI ====================
+Library:Watermark("| TSRUST ♡ Ohio Mega Hub |")
+local W = Library:Window("| TSRUST ♡ Hub |")
+
+pcall(function()
+    local gui = game:GetService("CoreGui"):FindFirstChild("RedOnyx")
+    if not gui then return end
+    local mf = gui:FindFirstChild("MainFrame", true)
+    if not mf then return end
+    local b = Instance.new("Frame")
+    b.Size = UDim2.new(0,300,0,48)
+    b.Position = UDim2.new(0,20,0,-56)
+    b.BackgroundColor3 = Color3.fromRGB(90,170,255)
+    b.BorderSizePixel = 0
+    b.Parent = mf
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0,14)
+    local st = Instance.new("UIStroke", b)
+    st.Thickness = 2.5
+    st.Color = Color3.fromRGB(255,255,255)
+    local gr = Instance.new("UIGradient", b)
+    gr.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(60,150,255)),
+        ColorSequenceKeypoint.new(0.4, Color3.fromRGB(190,225,255)),
+        ColorSequenceKeypoint.new(0.75, Color3.fromRGB(130,200,255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(80,165,255)),
+    }
+    gr.Rotation = 12
+    local sh = Instance.new("TextLabel", b)
+    sh.Size = UDim2.new(1,0,1,0)
+    sh.Position = UDim2.new(0,3,0,3)
+    sh.BackgroundTransparency = 1
+    sh.Text = "TSRUST"
+    sh.Font = Enum.Font.GothamBlack
+    sh.TextSize = 30
+    sh.TextColor3 = Color3.fromRGB(10,30,70)
+    local tl = Instance.new("TextLabel", b)
+    tl.Size = UDim2.new(1,0,1,0)
+    tl.BackgroundTransparency = 1
+    tl.Text = "TSRUST"
+    tl.Font = Enum.Font.GothamBlack
+    tl.TextSize = 30
+    tl.TextColor3 = Color3.fromRGB(255,255,255)
+    local ts = Instance.new("UIStroke", tl)
+    ts.Thickness = 2
+    ts.Color = Color3.fromRGB(180,220,255)
+end)
+
+W:Section("TSRUST | Ohio")
+
+local T1 = W:Tab("Фарм", "dollar-sign")
+local T2 = W:Tab("Игрок", "activity")
+local T3 = W:Tab("Бой", "sword")
+local T4 = W:Tab("Игроки", "users")
+local T5 = W:Tab("Визуал", "eye")
+
+-- ========== ФАРМ ==========
+local F1 = T1:SubTab("Авто-лут")
+local F2 = T1:SubTab("Настройки")
+local B1 = F1:Groupbox("Авто-ТП к луту", "Left", "target", "true")
+B1:AddParagraph({Title="Сбор ресурсов Ohio",Content="ТП или полёт к ближайшему предмету.\nПодбирает через Prompt, Click и Touch.\nЖдёт в фоне если лута нет.",TextWrapped=true})
+B1:AddToggle({Title="Авто-лут",Flag="t_loot",Default=false,Callback=function(v) S.Loot=v; if not v then clrPhys() end end})
+B1:AddButton({Title="Разовый ТП к луту",Callback=function()
+    local t = findLoot()
+    if not t then if Library.Notify then Library:Notify("TSRUST","Нет лута рядом",2) end return end
+    tp(t.Position+Vector3.new(0,3,0)); pickup(t)
+    if Library.Notify then Library:Notify("TSRUST","ТП к: "..t.Name,1.5) end
+end})
+
+local B2 = F1:Groupbox("Предметы фарма", "Right", "list-checks", "true")
+local sortedItems = {}
+for k in pairs(Items) do table.insert(sortedItems, k) end
+table.sort(sortedItems)
+for _, key in ipairs(sortedItems) do
+    local d = key:gsub("^%l", string.upper):gsub("(%s%l)", string.upper)
+    B2:AddCheckbox({Title=d, Default=true, Callback=function(v) Items[key]=v end})
+end
+
+local C1 = F2:Groupbox("Режим", "Left", "navigation", "true")
+local C2 = F2:Groupbox("Параметры", "Right", "gauge", "true")
+C1:AddDropdown({Title="Режим",Values={"Телепорт","Полёт"},Default="Телепорт",Callback=function(v) S.LootMode = v=="Полёт" and "Fly" or "Teleport" end})
+C1:AddSlider({Title="Скорость полёта лута",Min=40,Max=180,Default=80,Callback=function(v) S.FlySpeedLoot=v end})
+C2:AddSlider({Title="Задержка лута",Min=0.05,Max=1.5,Default=0.2,Rounding=2,Suffix=" с",Callback=function(v) S.LootDelay=v end})
+C2:AddSlider({Title="Пауза без лута",Min=0.2,Max=3,Default=0.5,Rounding=2,Suffix=" с",Callback=function(v) S.IdleDelay=v end})
+C2:AddSlider({Title="Радиус поиска",Min=200,Max=2500,Default=900,Suffix=" студ.",Callback=function(v) S.Radius=v end})
+
+-- ========== ИГРОК ==========
+local P1 = T2:SubTab("Характеристики")
+local P2 = T2:SubTab("Передвижение")
+local PB = P1:Groupbox("Скорость и прыжок", "Left", "activity", "true")
+PB:AddSlider({Title="Скорость бега",Min=8,Max=200,Default=16,Callback=function(v) S.Speed=v; local h=hum(); if h then h.WalkSpeed=v end end})
+PB:AddToggle({Title="Лочить скорость",Default=false,Callback=function(v) S.SpeedLock=v end})
+PB:AddSlider({Title="Сила прыжка",Min=20,Max=200,Default=50,Callback=function(v) S.Jump=v; local h=hum(); if h then h.JumpPower=v end end})
+PB:AddToggle({Title="Лочить прыжок",Default=false,Callback=function(v) S.JumpLock=v end})
+
+local PB2 = P1:Groupbox("Режимы", "Right", "shield-check", "true")
+PB2:AddToggle({Title="God Mode (HP = ∞)",Default=false,Callback=function(v) S.GodMode=v; toggleGod(v) end})
+PB2:AddToggle({Title="Бесконечный прыжок",Default=false,Callback=function(v) S.InfJump=v end})
+
+local MB = P2:Groupbox("Полёт и ноуклип", "Left", "navigation", "true")
+MB:AddToggle({Title="Полёт (WASD + Space/Shift)",Default=false,Callback=function(v)
+    S.Fly=v
+    if v then startFly() else stopFly() end
+end})
+MB:AddSlider({Title="Скорость полёта",Min=20,Max=200,Default=60,Callback=function(v) S.FlySpeed=v end})
+MB:AddToggle({Title="Ноуклип (сквозь стены)",Default=false,Callback=function(v)
+    S.Noclip=v
+    if v then startNoclip() else stopNoclip() end
+end})
+
+-- ========== БОЙ ==========
+local K1 = T3:SubTab("Кил-аура")
+local KB = K1:Groupbox("Кил-аура", "Left", "sword", "true")
+KB:AddParagraph({Title="Как работает",Content="ТП к ближайшему врагу, экипирует оружие,\nпытается нанести урон (touch + click).",TextWrapped=true})
+KB:AddToggle({Title="Кил-аура",Default=false,Callback=function(v) S.KillAura=v end})
+KB:AddSlider({Title="Радиус",Min=10,Max=80,Default=30,Suffix=" студ.",Callback=function(v) S.KillRadius=v end})
+
+-- ========== ИГРОКИ ==========
+local PL1 = T4:SubTab("ТП к игрокам")
+local PLL = PL1:Groupbox("Цель", "Left", "user", "true")
+local PLR = PL1:Groupbox("Действия", "Right", "users-round", "true")
+local function plist()
+    local l={}; for _,p in ipairs(Players:GetPlayers()) do if p~=LP then table.insert(l,p.Name) end end; table.sort(l); return l
+end
+PLL:AddDropdown({Title="Игрок",Values=plist(),Flag="t_target",Callback=function(v) S.Target=v end})
+local function refreshPL() local it=Library.Items and Library.Items["t_target"]; if it and it.Refresh then it.Refresh(plist()) end end
+Players.PlayerAdded:Connect(refreshPL)
+Players.PlayerRemoving:Connect(refreshPL)
+PLL:AddButton({Title="Обновить список",Callback=function() refreshPL() end})
+PLR:AddButton({Title="ТП к игроку",Callback=function()
+    if not S.Target then return end
+    local p=Players:FindFirstChild(S.Target)
+    local th=p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+    if th then tp(th.Position+Vector3.new(0,3,0)) end
+end})
+PLR:AddToggle({Title="Фоллоу за игроком",Default=false,Callback=function(v) S.Follow=v end})
+PLR:AddToggle({Title="ТП по всем по кругу",Default=false,Callback=function(v) S.LoopAll=v end})
+
+-- ========== ВИЗУАЛ ==========
+local V1 = T5:SubTab("ESP и свет")
+local VB = V1:Groupbox("Визуальные функции", "Left", "eye", "true")
+VB:AddToggle({Title="ESP игроков (имя + подсветка)",Default=false,Callback=function(v) S.ESP=v; if not v then updateESP() end end})
+VB:AddToggle({Title="Фуллбрайт (всегда светло)",Default=false,Callback=function(v) S.Fullbright=v; setFullbright(v) end})
+VB:AddToggle({Title="Анти-АФК",Default=false,Callback=function(v)
+    S.AntiAFK=v
+    if v then startAntiAFK() else stopAntiAFK() end
+end})
+
+if Library.Notify then Library:Notify("TSRUST","Ohio Mega Hub загружен",3) end
