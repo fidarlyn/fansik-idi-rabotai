@@ -1,105 +1,230 @@
---// Сервисы
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
+--[[
+    TPpart Auto Loot v2
+    Автор: fidarlyn
+    Функции:
+    - Авто-ТП к ближайшему нужному предмету
+    - Автоматическая попытка подбора (ProximityPrompt + touch)
+    - Перезапуск после смерти персонажа
+    - Тоггл по горячей клавише (по умолчанию: K)
+--]]
+
+------------------------------
+-- НАСТРОЙКИ
+------------------------------
+
+local SETTINGS = {
+    -- Имена предметов (можно писать в любом регистре)
+    ItemNames = {
+        "Money printer",
+        "gold deagle",
+        "scar l",
+        "FN FAL",
+        "Military armory keycard",
+        "mustang key",
+        "AS Val",
+    },
+
+    TeleportOffset      = Vector3.new(0, 3, 0),  -- Насколько выше предмета ТП (0,3,0)
+    DelayBetweenItems   = 0.5,                   -- Задержка между предметами
+    SearchThrottleEvery = 150,                   -- После скольких частей вставлять небольшой wait()
+    ToggleKey           = Enum.KeyCode.K,        -- Клавиша включения/выключения автофарма
+    Notifications       = true                   -- Всплывающие уведомления (через SetCore)
+}
+
+------------------------------
+-- СЕРВИСЫ
+------------------------------
+
+local Players     = game:GetService("Players")
+local Workspace   = game:GetService("Workspace")
+local UserInput   = game:GetService("UserInputService")
+local StarterGui  = game:GetService("StarterGui")
+local RunService  = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
---// Какие предметы фармим
-local WantedNames = {
-    ["Money printer"] = true,
-    ["gold deagle"] = true,
-    ["scar l"] = true,
-    ["FN FAL"] = true,
-    ["Military armory keycard"] = true,
-    ["mustang key"] = true,
-    ["AS Val"] = true,
-}
+------------------------------
+-- ВСПОМОГАТЕЛЬНЫЕ
+------------------------------
 
-local TPpart_Farm_Running = false
+local function notify(title, text, dur)
+    if not SETTINGS.Notifications then return end
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title    = title,
+            Text     = text,
+            Duration = dur or 3
+        })
+    end)
+end
 
-local function FindClosestWantedPart()
-    local character = LocalPlayer.Character
-    if not character then return nil end
+local function getCharacter()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local hrp  = char:WaitForChild("HumanoidRootPart", 5)
+    local hum  = char:FindFirstChildOfClass("Humanoid")
 
-    local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
+    if not (char and hrp and hum and hum.Health > 0) then
+        return nil, nil
+    end
 
-    local closest, closestDist = nil, math.huge
+    return char, hrp
+end
 
-    for _, inst in ipairs(Workspace:GetDescendants()) do
-        if inst:IsA("BasePart") then
-            local n = string.lower(inst.Name)
-            for wantName, _ in pairs(WantedNames) do
-                if n == string.lower(wantName) then
-                    local dist = (inst.Position - hrp.Position).Magnitude
-                    if dist < closestDist then
-                        closestDist = dist
-                        closest = inst
-                    end
-                    break
-                end
-            end
+-- Преобразуем список имён в таблицу (нижний регистр, для быстрого поиска)
+local WantedLookup = {}
+for _, name in ipairs(SETTINGS.ItemNames) do
+    WantedLookup[string.lower(name)] = true
+end
+
+-- Проверка, является ли часть нужным предметом
+local function isWantedPart(inst)
+    if not inst:IsA("BasePart") then
+        return false
+    end
+
+    local nameLower = string.lower(inst.Name)
+
+    -- Точное совпадение
+    if WantedLookup[nameLower] then
+        return true
+    end
+
+    -- Дополнительно: ищем по подстроке (чтобы ловить варианты имён)
+    for wantedName, _ in pairs(WantedLookup) do
+        if string.find(nameLower, wantedName, 1, true) then
+            return true
         end
     end
 
-    return closest
+    return false
 end
 
---// Главная функция автофарма ТП к предметам
-local function Start_TPpart_Farm()
-    -- повторный вызов = остановка
-    if TPpart_Farm_Running then
-        TPpart_Farm_Running = false
-        warn("TPpart фарм: остановлен")
+------------------------------
+-- ПОИСК БЛИЖАЙШЕГО ПРЕДМЕТА
+------------------------------
+
+local function findClosestWantedPart(hrp)
+    local closestPart, closestDist = nil, math.huge
+    local count = 0
+
+    for _, inst in ipairs(Workspace:GetDescendants()) do
+        if isWantedPart(inst) then
+            local dist = (inst.Position - hrp.Position).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closestPart = inst
+            end
+        end
+
+        count += 1
+        if count % SETTINGS.SearchThrottleEvery == 0 then
+            task.wait() -- разгружаем поиск, чтобы не лагало
+        end
+    end
+
+    return closestPart
+end
+
+------------------------------
+-- ПОДБОР ПРЕДМЕТА
+------------------------------
+
+local function tryPickupPart(hrp, part)
+    if not (hrp and part and part.Parent) then
         return
     end
 
-    TPpart_Farm_Running = true
-    warn("TPpart фарм: запущен")
-
-    task.spawn(function()
-        while TPpart_Farm_Running do
-            local character = LocalPlayer.Character
-            local hrp = character and character:FindFirstChild("HumanoidRootPart")
-
-            if not (character and hrp) then
-                TPpart_Farm_Running = false
-                warn("TPpart фарм: персонаж не найден, остановка")
-                break
-            end
-
-            local target = FindClosestWantedPart()
-            if not target or not target.Parent then
-                warn("TPpart фарм: подходящих предметов нет, остановка")
-                TPpart_Farm_Running = false
-                break
-            end
-
-            -- Телепорт немного выше предмета
-            hrp.CFrame = target.CFrame + Vector3.new(0, 3, 0)
-
-            -- Попытка "подобрать" через ProximityPrompt
-            local prompt = target:FindFirstChildOfClass("ProximityPrompt")
-            if prompt then
-                if typeof(fireproximityprompt) == "function" then
-                    fireproximityprompt(prompt)
-                else
-                    prompt.HoldDuration = 0
-                    prompt:InputHoldBegin()
-                    task.wait(0.1)
-                    prompt:InputHoldEnd()
-                end
-            end
-
-            -- Попытка подобрать через touch (для оружия/дропа)
-            if typeof(firetouchinterest) == "function" then
-                firetouchinterest(hrp, target, 0)
-                firetouchinterest(hrp, target, 1)
-            end
-
-            -- Небольшая задержка между предметами
-            task.wait(0.5)
+    -- 1) ProximityPrompt (часто используется для ключей/оружия)
+    local prompt = part:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt then
+        if typeof(fireproximityprompt) == "function" then
+            fireproximityprompt(prompt)
+        else
+            prompt.HoldDuration = 0
+            prompt:InputHoldBegin()
+            task.wait(0.1)
+            prompt:InputHoldEnd()
         end
-    end)
+    end
+
+    -- 2) Touch (оружие, дроп и т.п.)
+    if typeof(firetouchinterest) == "function" then
+        firetouchinterest(hrp, part, 0)
+        firetouchinterest(hrp, part, 1)
+    end
 end
+
+------------------------------
+-- ОСНОВНОЙ ЦИКЛ АВТОФАРМА
+------------------------------
+
+local Running = false
+
+local function autoFarmLoop()
+    if Running then
+        -- Повторный вызов – выключение
+        Running = false
+        notify("TPpart", "Авто-ТП выключен", 3)
+        return
+    end
+
+    Running = true
+    notify("TPpart", "Авто-ТП включен (клавиша: " .. SETTINGS.ToggleKey.Name .. ")", 4)
+
+    while Running do
+        local character, hrp = getCharacter()
+        if not (character and hrp) then
+            notify("TPpart", "Персонаж не найден, ожидание респавна", 3)
+            repeat
+                task.wait(1)
+                character, hrp = getCharacter()
+            until not Running or (character and hrp)
+            if not Running then break end
+        end
+
+        local target = findClosestWantedPart(hrp)
+        if not target or not target.Parent then
+            notify("TPpart", "Подходящих предметов не найдено", 3)
+            break
+        end
+
+        local name = target.Name
+        warn(("[TPpart] Телепорт к %s"):format(name))
+
+        -- Телепорт немного выше предмета
+        hrp.CFrame = target.CFrame + SETTINGS.TeleportOffset
+
+        -- Небольшая задержка, чтобы физика прогрузилась
+        task.wait(0.15)
+
+        -- Попытка подбора
+        tryPickupPart(hrp, target)
+
+        -- Задержка между целями
+        local untilTime = tick() + SETTINGS.DelayBetweenItems
+        while Running and tick() < untilTime do
+            task.wait()
+        end
+    end
+
+    Running = false
+    notify("TPpart", "Авто-ТП завершён", 3)
+end
+
+------------------------------
+-- ГОРЯЧАЯ КЛАВИША ДЛЯ ВКЛ/ВЫКЛ
+------------------------------
+
+UserInput.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == SETTINGS.ToggleKey then
+        autoFarmLoop()
+    end
+end)
+
+------------------------------
+-- СООБЩЕНИЕ ПРИ ЗАГРУЗКЕ
+------------------------------
+
+notify("TPpart", "Скрипт загружен. Нажми " .. SETTINGS.ToggleKey.Name .. " для старта.", 5)
+warn("[TPpart] Скрипт загружен. Нажми " .. SETTINGS.ToggleKey.Name .. " для запуска / остановки авто-ТП.")
