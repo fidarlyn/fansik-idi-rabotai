@@ -1,0 +1,509 @@
+--[[
+    TSRUST | Ohio TP & Loot — исправлено (без getgenv), расширенный лут
+    • Нет вызова nil: защита от отсутствующего getgenv
+    • Больше предметов Ohio: принтер, C4, оружие, ключи, гемы, сундуки
+    • Телепорт/полёт, настройка скорости, ТП к игрокам
+]]--
+
+-- Защита от двойного запуска БЕЗ getgenv (чтобы не было "attempt to call a nil value")
+do
+    local key = "TSRUST_TPpart_LOADED"
+    if _G[key] then
+        warn("[TSRUST] Уже запущен")
+        return
+    end
+    _G[key] = true
+end
+
+local LibraryUrl = "https://raw.githubusercontent.com/1Qlua-RBXscript/1qlua/refs/heads/main/labar"
+local ok, Library = pcall(function()
+    return loadstring(game:HttpGet(LibraryUrl))()
+end)
+
+if not ok or not Library then
+    warn("[TSRUST] Не удалось загрузить UI!")
+    return
+end
+
+if type(Library.SetTheme) == "function" then
+    pcall(function() Library:SetTheme("Ocean") end)
+end
+
+local Players   = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+local AutoLootEnabled = false
+local MoveMode = "Teleport"
+local LootDelay = 0.25
+local NoLootDelay = 0.6
+local SearchRadius = 900
+local FlySpeed = 80
+local FollowEnabled = false
+local LoopAllEnabled = false
+
+-- Расширенный список лута Ohio (принтер, C4, оружие, ключи, гемы и т.д.)
+local TargetItems = {
+    ["money printer"]               = { Display = "Money printer" },
+    ["gold deagle"]                 = { Display = "Gold Deagle" },
+    ["gold ak"]                     = { Display = "Gold AK-47" },
+    ["gold ak-47"]                  = { Display = "Gold AK-47" },
+    ["scar l"]                      = { Display = "SCAR-L" },
+    ["fn fal"]                      = { Display = "FN FAL" },
+    ["military armory keycard"]     = { Display = "Military armory keycard" },
+    ["mustang key"]                 = { Display = "Mustang key" },
+    ["as val"]                      = { Display = "AS VAL" },
+    ["c4"]                          = { Display = "C4" },
+    ["emerald"]                     = { Display = "Emerald" },
+    ["ruby"]                        = { Display = "Ruby" },
+    ["amethyst"]                    = { Display = "Amethyst" },
+    ["diamond"]                     = { Display = "Diamond" },
+    ["dark matter gem"]             = { Display = "Dark Matter Gem" },
+    ["treasure map"]                = { Display = "Treasure Map" },
+    ["treasure chest"]              = { Display = "Treasure Chest" },
+}
+
+local EnabledTargets = {}
+for name in pairs(TargetItems) do EnabledTargets[name] = true end
+
+local function getCharacter()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
+    if not hrp then return nil, nil end
+    return char, hrp
+end
+
+local function isTargetEnabled(nameLower)
+    return EnabledTargets[nameLower] == true
+end
+
+local function FindClosestWantedPart()
+    local char, hrp = getCharacter()
+    if not char or not hrp then return nil end
+    local closest, closestDist = nil, SearchRadius
+    for _, inst in ipairs(Workspace:GetDescendants()) do
+        if inst:IsA("BasePart") then
+            local l = string.lower(inst.Name)
+            if isTargetEnabled(l) then
+                local d = (inst.Position - hrp.Position).Magnitude
+                if d < closestDist then
+                    closestDist = d
+                    closest = inst
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function clearFlight(char, hrp)
+    char = char or LocalPlayer.Character
+    hrp = hrp or (char and char:FindFirstChild("HumanoidRootPart"))
+    if not hrp then return end
+    for _, v in ipairs(hrp:GetChildren()) do
+        if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then v:Destroy() end
+    end
+end
+
+local function FlyToPosition(targetPos)
+    local char, hrp = getCharacter()
+    if not char or not hrp then return end
+    clearFlight(char, hrp)
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(40000, 40000, 40000)
+    bv.Velocity = Vector3.new(0, 0, 0)
+    bv.P = 1500
+    bv.Parent = hrp
+    local gyro = Instance.new("BodyGyro")
+    gyro.MaxTorque = Vector3.new(40000, 40000, 40000)
+    gyro.P = 3000
+    gyro.CFrame = hrp.CFrame
+    gyro.Parent = hrp
+    local reached = false
+    local start = tick()
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if not AutoLootEnabled or not hrp.Parent then
+            reached = true
+            if conn then conn:Disconnect() end
+            return
+        end
+        local delta = targetPos - hrp.Position
+        local dist = delta.Magnitude
+        if dist < 4 or tick() - start > 12 then
+            reached = true
+            if conn then conn:Disconnect() end
+            return
+        end
+        local dir = delta.Unit
+        local spd = math.min(FlySpeed, dist * 3)
+        bv.Velocity = dir * spd
+        gyro.CFrame = CFrame.new(hrp.Position, targetPos)
+    end)
+    while not reached and tick() - start < 12 do task.wait() end
+    if conn then conn:Disconnect() end
+    clearFlight(char, hrp)
+    if hrp and hrp.Parent then
+        hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.2, 0))
+    end
+end
+
+local function TeleportToPosition(pos)
+    local _, hrp = getCharacter()
+    if not hrp then return end
+    hrp.CFrame = CFrame.new(pos + Vector3.new(0, 0.2, 0))
+end
+
+local function TryPickup(target)
+    if not target or not target.Parent then return end
+    local _, hrp = getCharacter()
+    if not hrp then return end
+    local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt then
+        if typeof(fireproximityprompt) == "function" then
+            fireproximityprompt(prompt)
+        else
+            prompt.HoldDuration = 0
+            prompt:InputHoldBegin()
+            task.wait(0.12)
+            prompt:InputHoldEnd()
+        end
+    end
+    if typeof(firetouchinterest) == "function" then
+        firetouchinterest(hrp, target, 0)
+        firetouchinterest(hrp, target, 1)
+    end
+end
+
+task.spawn(function()
+    while true do
+        if AutoLootEnabled then
+            local char, hrp = getCharacter()
+            if not char or not hrp then
+                task.wait(1)
+            else
+                local target = FindClosestWantedPart()
+                if target and target.Parent then
+                    local dest = target.Position + Vector3.new(0, 3, 0)
+                    if MoveMode == "Fly" then
+                        FlyToPosition(dest)
+                    else
+                        TeleportToPosition(dest)
+                    end
+                    TryPickup(target)
+                    local lname = string.lower(target.Name)
+                    local nice = TargetItems[lname] and TargetItems[lname].Display or target.Name
+                    if type(Library.Notify) == "function" then
+                        Library:Notify("TSRUST | Лут", "ТП к: " .. nice, 1.2)
+                    end
+                    task.wait(LootDelay)
+                else
+                    task.wait(NoLootDelay)
+                end
+            end
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+local SelectedPlayerName = nil
+
+local function getPlayerList()
+    local list = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then table.insert(list, plr.Name) end
+    end
+    table.sort(list)
+    return list
+end
+
+local function getSelectedPlayer()
+    return SelectedPlayerName and Players:FindFirstChild(SelectedPlayerName) or nil
+end
+
+local function TeleportToPlayer(plr)
+    plr = plr or getSelectedPlayer()
+    if not plr then
+        if type(Library.Notify) == "function" then Library:Notify("TSRUST | Игроки", "Игрок не выбран", 1.5) end
+        return
+    end
+    local tch = plr.Character
+    local thrp = tch and tch:FindFirstChild("HumanoidRootPart")
+    if not thrp then
+        if type(Library.Notify) == "function" then Library:Notify("TSRUST | Игроки", "Нет персонажа", 1.5) end
+        return
+    end
+    TeleportToPosition(thrp.Position + Vector3.new(0, 3, 0))
+end
+
+task.spawn(function()
+    while true do
+        if FollowEnabled then
+            local plr = getSelectedPlayer()
+            local thrp = plr and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+            local _, hrp = getCharacter()
+            if thrp and hrp then hrp.CFrame = thrp.CFrame + Vector3.new(0, 3, 0) end
+            task.wait(0.25)
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+task.spawn(function()
+    local idx = 1
+    while true do
+        if LoopAllEnabled then
+            local list = getPlayerList()
+            if #list == 0 then
+                task.wait(1)
+            else
+                if idx > #list then idx = 1 end
+                local plr = Players:FindFirstChild(list[idx])
+                if plr then TeleportToPlayer(plr) end
+                idx = idx + 1
+                task.wait(0.4)
+            end
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+if type(Library.Watermark) ~= "function" then return warn("[TSRUST] У библиотеки нет Watermark") end
+Library:Watermark("| TSRUST ♡ Ohio TP & Loot |")
+
+local Window = Library:Window("| TSRUST ♡ TP Hub |")
+if not Window then return warn("[TSRUST] Не удалось создать окно") end
+
+pcall(function()
+    local CoreGui = game:GetService("CoreGui")
+    local gui = CoreGui:FindFirstChild("RedOnyx")
+    if not gui then return end
+    local main = gui:FindFirstChild("MainFrame", true)
+    if not main then return end
+
+    local banner = Instance.new("Frame")
+    banner.Name = "TSRUST_Banner"
+    banner.Size = UDim2.new(0, 280, 0, 44)
+    banner.Position = UDim2.new(0, 24, 0, -52)
+    banner.BackgroundColor3 = Color3.fromRGB(100, 180, 255)
+    banner.BorderSizePixel = 0
+    banner.Parent = main
+
+    Instance.new("UICorner", banner).CornerRadius = UDim.new(0, 12)
+    local stroke = Instance.new("UIStroke", banner)
+    stroke.Thickness = 2
+    stroke.Color = Color3.fromRGB(255, 255, 255)
+    local grad = Instance.new("UIGradient", banner)
+    grad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0.0, Color3.fromRGB(70, 160, 255)),
+        ColorSequenceKeypoint.new(0.35, Color3.fromRGB(180, 220, 255)),
+        ColorSequenceKeypoint.new(0.7, Color3.fromRGB(140, 200, 255)),
+        ColorSequenceKeypoint.new(1.0, Color3.fromRGB(90, 170, 255))
+    }
+    grad.Rotation = 15
+    local shadow = Instance.new("TextLabel", banner)
+    shadow.Size = UDim2.new(1, 0, 1, 0)
+    shadow.Position = UDim2.new(0, 4, 0, 4)
+    shadow.BackgroundTransparency = 1
+    shadow.Text = "TSRUST"
+    shadow.Font = Enum.Font.GothamBlack
+    shadow.TextSize = 28
+    shadow.TextColor3 = Color3.fromRGB(15, 40, 80)
+    shadow.TextXAlignment = Enum.TextXAlignment.Center
+    local title = Instance.new("TextLabel", banner)
+    title.Size = UDim2.new(1, 0, 1, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "TSRUST"
+    title.Font = Enum.Font.GothamBlack
+    title.TextSize = 28
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.TextXAlignment = Enum.TextXAlignment.Center
+    local tStroke = Instance.new("UIStroke", title)
+    tStroke.Thickness = 2
+    tStroke.Color = Color3.fromRGB(200, 230, 255)
+end)
+
+if type(Window.Section) ~= "function" then return warn("[TSRUST] У библиотеки нет Section") end
+Window:Section("TSRUST | Меню")
+
+local LootTab = Window:Tab("Лут", "dollar-sign")
+local PlayersTab = Window:Tab("Игроки", "users")
+local SettingsTab = Window:Tab("Настройки", "settings-2")
+
+if not LootTab then return warn("[TSRUST] Нет таба Лут") end
+
+local LootMain = LootTab:SubTab("Авто-лут")
+local LootSet = LootTab:SubTab("Настройки лута")
+
+local LootBox = LootMain:Groupbox("Авто-ТП по предметам", "Left", "target", "true")
+
+LootBox:AddParagraph({
+    Title = "TSRUST | Ohio авто-лут",
+    Content = "Мгновенный ТП или полёт к луту. В фоне ждёт появления предметов. Режим и скорость — в Настройках лута.",
+    TextWrapped = true
+})
+
+LootBox:AddToggle({
+    Title = "Включить авто-лут",
+    Description = "Постоянный поиск и перемещение к предметам",
+    Flag = "TSRUST_AutoLoot",
+    Default = false,
+    Callback = function(state)
+        AutoLootEnabled = state
+        if not state then clearFlight() end
+        if type(Library.Notify) == "function" then
+            Library:Notify("TSRUST", state and "Авто-лут включён" or "Авто-лут выключен", 2)
+        end
+    end
+})
+
+LootBox:AddButton({
+    Title = "Разовый ТП к ближайшему предмету",
+    Callback = function()
+        local target = FindClosestWantedPart()
+        if not target then
+            if type(Library.Notify) == "function" then Library:Notify("TSRUST | Лут", "Рядом нет подходящих предметов", 2) end
+            return
+        end
+        local dest = target.Position + Vector3.new(0, 3, 0)
+        if MoveMode == "Fly" then FlyToPosition(dest) else TeleportToPosition(dest) end
+        TryPickup(target)
+        if type(Library.Notify) == "function" then Library:Notify("TSRUST | Лут", "ТП к: " .. target.Name, 1.5) end
+    end
+})
+
+local FilterBox = LootMain:Groupbox("Предметы фарма (Ohio)", "Right", "list-checks", "true")
+
+for key, data in pairs(TargetItems) do
+    FilterBox:AddCheckbox({
+        Title = data.Display,
+        Default = true,
+        Callback = function(state) EnabledTargets[key] = state end
+    })
+end
+
+local SetLeft = LootSet:Groupbox("Режим и скорость", "Left", "navigation", "true")
+local SetRight = LootSet:Groupbox("Задержки и радиус", "Right", "gauge", "true")
+
+SetLeft:AddDropdown({
+    Title = "Режим перемещения",
+    Values = { "Телепорт", "Полёт" },
+    Default = "Телепорт",
+    Callback = function(v)
+        MoveMode = (v == "Полёт") and "Fly" or "Teleport"
+        if type(Library.Notify) == "function" then Library:Notify("TSRUST", "Режим: " .. v, 2) end
+    end
+})
+
+SetLeft:AddSlider({
+    Title = "Скорость полёта",
+    Min = 40,
+    Max = 180,
+    Default = 80,
+    Callback = function(v) FlySpeed = v end
+})
+
+SetRight:AddSlider({
+    Title = "Задержка между предметами",
+    Min = 0.1,
+    Max = 1.5,
+    Default = 0.25,
+    Rounding = 2,
+    Suffix = " с",
+    Callback = function(v) LootDelay = v end
+})
+
+SetRight:AddSlider({
+    Title = "Пауза, если лута нет",
+    Min = 0.2,
+    Max = 2.5,
+    Default = 0.6,
+    Rounding = 2,
+    Suffix = " с",
+    Callback = function(v) NoLootDelay = v end
+})
+
+SetRight:AddSlider({
+    Title = "Радиус поиска",
+    Min = 200,
+    Max = 2500,
+    Default = 900,
+    Suffix = " студ.",
+    Callback = function(v) SearchRadius = v end
+})
+
+local PlMain = PlayersTab:SubTab("ТП / Фоллоу")
+local PlLeft = PlMain:Groupbox("Цель", "Left", "user", "true")
+local PlRight = PlMain:Groupbox("Действия", "Right", "users-round", "true")
+
+PlLeft:AddDropdown({
+    Title = "Игрок",
+    Values = getPlayerList(),
+    Flag = "TSRUST_TargetPlayer",
+    Callback = function(v)
+        SelectedPlayerName = v
+        if v and type(Library.Notify) == "function" then Library:Notify("TSRUST | Игроки", "Цель: " .. v, 2) end
+    end
+})
+
+local function refreshPlayerDropdown()
+    if Library.Items and Library.Items["TSRUST_TargetPlayer"] and Library.Items["TSRUST_TargetPlayer"].Refresh then
+        Library.Items["TSRUST_TargetPlayer"].Refresh(getPlayerList())
+    end
+end
+
+Players.PlayerAdded:Connect(refreshPlayerDropdown)
+Players.PlayerRemoving:Connect(refreshPlayerDropdown)
+
+PlLeft:AddButton({
+    Title = "Обновить список игроков",
+    Callback = function()
+        refreshPlayerDropdown()
+        if type(Library.Notify) == "function" then Library:Notify("TSRUST | Игроки", "Список обновлён", 2) end
+    end
+})
+
+PlRight:AddButton({
+    Title = "ТП к выбранному игроку",
+    Callback = function() TeleportToPlayer() end
+})
+
+PlRight:AddToggle({
+    Title = "Фоллоу за игроком",
+    Flag = "TSRUST_FollowPlayer",
+    Default = false,
+    Callback = function(state)
+        FollowEnabled = state
+        if type(Library.Notify) == "function" then Library:Notify("TSRUST | Игроки", state and "Фоллоу вкл" or "Фоллоу выкл", 2) end
+    end
+})
+
+PlRight:AddToggle({
+    Title = "ТП по всем по кругу",
+    Flag = "TSRUST_LoopAllPlayers",
+    Default = false,
+    Callback = function(state)
+        LoopAllEnabled = state
+        if type(Library.Notify) == "function" then Library:Notify("TSRUST | Игроки", state and "Луп по всем вкл" or "Луп по всем выкл", 2) end
+    end
+})
+
+local InfoTab = SettingsTab:SubTab("Инфо")
+local InfoBox = InfoTab:Groupbox("О скрипте", "Left", "info", "true")
+
+InfoBox:AddParagraph({
+    Title = "TSRUST | Ohio TP & Loot",
+    Content = "• Авто-лут: телепорт или полёт, скорость настраивается\n" ..
+              "• Предметы: принтер, C4, оружие, ключи, гемы, сундуки\n" ..
+              "• Скрипт в фоне ждёт появления лута\n" ..
+              "• ТП к игрокам, фоллоу, луп по всем. Ошибка исправлена (без getgenv).",
+    TextWrapped = true
+})
+
+if type(Library.Notify) == "function" then
+    Library:Notify("TSRUST", "Ohio TP & Loot загружен", 3)
+end
