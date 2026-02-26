@@ -1,0 +1,105 @@
+--// Сервисы
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+--// Какие предметы фармим
+local WantedNames = {
+    ["Money printer"] = true,
+    ["gold deagle"] = true,
+    ["scar l"] = true,
+    ["FN FAL"] = true,
+    ["Military armory keycard"] = true,
+    ["mustang key"] = true,
+    ["AS Val"] = true,
+}
+
+local TPpart_Farm_Running = false
+
+local function FindClosestWantedPart()
+    local character = LocalPlayer.Character
+    if not character then return nil end
+
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local closest, closestDist = nil, math.huge
+
+    for _, inst in ipairs(Workspace:GetDescendants()) do
+        if inst:IsA("BasePart") then
+            local n = string.lower(inst.Name)
+            for wantName, _ in pairs(WantedNames) do
+                if n == string.lower(wantName) then
+                    local dist = (inst.Position - hrp.Position).Magnitude
+                    if dist < closestDist then
+                        closestDist = dist
+                        closest = inst
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    return closest
+end
+
+--// Главная функция автофарма ТП к предметам
+local function Start_TPpart_Farm()
+    -- повторный вызов = остановка
+    if TPpart_Farm_Running then
+        TPpart_Farm_Running = false
+        warn("TPpart фарм: остановлен")
+        return
+    end
+
+    TPpart_Farm_Running = true
+    warn("TPpart фарм: запущен")
+
+    task.spawn(function()
+        while TPpart_Farm_Running do
+            local character = LocalPlayer.Character
+            local hrp = character and character:FindFirstChild("HumanoidRootPart")
+
+            if not (character and hrp) then
+                TPpart_Farm_Running = false
+                warn("TPpart фарм: персонаж не найден, остановка")
+                break
+            end
+
+            local target = FindClosestWantedPart()
+            if not target or not target.Parent then
+                warn("TPpart фарм: подходящих предметов нет, остановка")
+                TPpart_Farm_Running = false
+                break
+            end
+
+            -- Телепорт немного выше предмета
+            hrp.CFrame = target.CFrame + Vector3.new(0, 3, 0)
+
+            -- Попытка "подобрать" через ProximityPrompt
+            local prompt = target:FindFirstChildOfClass("ProximityPrompt")
+            if prompt then
+                if typeof(fireproximityprompt) == "function" then
+                    fireproximityprompt(prompt)
+                else
+                    prompt.HoldDuration = 0
+                    prompt:InputHoldBegin()
+                    task.wait(0.1)
+                    prompt:InputHoldEnd()
+                end
+            end
+
+            -- Попытка подобрать через touch (для оружия/дропа)
+            if typeof(firetouchinterest) == "function" then
+                firetouchinterest(hrp, target, 0)
+                firetouchinterest(hrp, target, 1)
+            end
+
+            -- Небольшая задержка между предметами
+            task.wait(0.5)
+        end
+    end)
+end
